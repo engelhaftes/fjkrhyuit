@@ -1,0 +1,208 @@
+USE master;
+GO
+
+ALTER DATABASE Museum SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('Museum') IS NOT NULL
+    DROP DATABASE Museum;
+GO
+
+CREATE DATABASE Museum;
+GO
+
+USE Museum;
+GO
+
+IF OBJECT_ID('VisitorCounts', 'U') IS NOT NULL DROP TABLE VisitorCounts;
+IF OBJECT_ID('ExcursionExhibits', 'U') IS NOT NULL DROP TABLE ExcursionExhibits;
+IF OBJECT_ID('Visitors', 'U') IS NOT NULL DROP TABLE Visitors;
+IF OBJECT_ID('Guides', 'U') IS NOT NULL DROP TABLE Guides;
+IF OBJECT_ID('Excursions', 'U') IS NOT NULL DROP TABLE Excursions;
+IF OBJECT_ID('Exhibits', 'U') IS NOT NULL DROP TABLE Exhibits;
+GO
+
+CREATE TABLE Exhibits (
+    exhibit_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    epoch NVARCHAR(100) NOT NULL,
+    value DECIMAL(18,2) NOT NULL CHECK (value >= 0),
+    hall NVARCHAR(50) NOT NULL
+);
+GO
+
+CREATE TABLE Guides (
+    guide_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    specialization NVARCHAR(200) NOT NULL,
+    experience_years INT NOT NULL CHECK (experience_years >= 0)
+);
+GO
+
+CREATE TABLE Excursions (
+    excursion_id INT IDENTITY(1,1) PRIMARY KEY,
+    theme NVARCHAR(200) NOT NULL,
+    guide_id INT NOT NULL,
+    excursion_date DATE NOT NULL,
+    duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+    max_group_size INT NOT NULL CHECK (max_group_size > 0),
+    FOREIGN KEY (guide_id) REFERENCES Guides(guide_id)
+);
+GO
+
+-- Связующая таблица для Many-to-Many между экскурсиями и экспонатами
+CREATE TABLE ExcursionExhibits (
+    excursion_id INT NOT NULL,
+    exhibit_id INT NOT NULL,
+    PRIMARY KEY (excursion_id, exhibit_id),
+    FOREIGN KEY (excursion_id) REFERENCES Excursions(excursion_id),
+    FOREIGN KEY (exhibit_id) REFERENCES Exhibits(exhibit_id)
+);
+GO
+
+CREATE TABLE Visitors (
+    visitor_id INT IDENTITY(1,1) PRIMARY KEY,
+    ticket_type NVARCHAR(50) NOT NULL,
+    visit_date DATE NOT NULL,
+    excursion_id INT NULL,
+    FOREIGN KEY (excursion_id) REFERENCES Excursions(excursion_id)
+);
+GO
+
+-- Для учёта количества посетителей по дням
+CREATE TABLE VisitorCounts (
+    visit_date DATE PRIMARY KEY,
+    visitor_count INT NOT NULL CHECK (visitor_count >= 0)
+);
+GO
+
+-- Триггер для обновления VisitorCounts при добавлении посетителей
+CREATE TRIGGER trg_UpdateVisitorCounts
+ON Visitors
+AFTER INSERT, DELETE, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Обновляем данные по датам посещений, затронутым в вставках или удалениях
+    MERGE VisitorCounts AS target
+    USING (
+        SELECT visit_date, COUNT(visitor_id) AS cnt
+        FROM Visitors
+        GROUP BY visit_date
+    ) AS source (visit_date, cnt)
+    ON target.visit_date = source.visit_date
+    WHEN MATCHED THEN
+        UPDATE SET visitor_count = source.cnt
+    WHEN NOT MATCHED BY TARGET THEN
+        INSERT (visit_date, visitor_count) VALUES (source.visit_date, source.cnt)
+    WHEN NOT MATCHED BY SOURCE THEN
+        DELETE;
+END;
+GO
+
+-- Триггер для ограничения размера группы экскурсии на добавление посетителей с экскурсиями
+CREATE TRIGGER trg_CheckExcursionGroupSize
+ON Visitors
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @excursion_id INT, @group_max INT;
+    DECLARE @inserted_count INT, @existing_count INT;
+
+    -- Проверяем все записи с экскурсиями из вставляемых данных
+    IF EXISTS (SELECT 1 FROM inserted WHERE excursion_id IS NOT NULL)
+    BEGIN
+        -- Для каждой экскурсии в вставке проверяем лимит
+        DECLARE cur CURSOR LOCAL FAST_FORWARD FOR 
+            SELECT excursion_id FROM inserted WHERE excursion_id IS NOT NULL GROUP BY excursion_id;
+
+        OPEN cur;
+
+        FETCH NEXT FROM cur INTO @excursion_id;
+
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            SELECT @group_max = max_group_size FROM Excursions WHERE excursion_id = @excursion_id;
+            SELECT @existing_count = COUNT(*) FROM Visitors WHERE excursion_id = @excursion_id;
+            SELECT @inserted_count = (SELECT COUNT(*) FROM inserted WHERE excursion_id = @excursion_id);
+
+            IF @existing_count + @inserted_count > @group_max
+            BEGIN
+                RAISERROR('Превышен лимит размера группы экскурсии!', 16, 1);
+                ROLLBACK TRANSACTION;
+                CLOSE cur;
+                DEALLOCATE cur;
+                RETURN;
+            END
+
+            FETCH NEXT FROM cur INTO @excursion_id;
+        END
+
+        CLOSE cur;
+        DEALLOCATE cur;
+    END
+
+    -- Если все проверки пройдены, вставляем данные
+    INSERT INTO Visitors (ticket_type, visit_date, excursion_id)
+    SELECT ticket_type, visit_date, excursion_id FROM inserted;
+END;
+GO
+
+-- Пример данных
+
+INSERT INTO Exhibits (name, epoch, value, hall) VALUES
+(N'Ваза из Древней Греции', N'Античность', 12000.00, N'Зал 1'),
+(N'Картина "Звёздная ночь"', N'Современность', 500000.00, N'Зал 2'),
+(N'Доспехи рыцаря', N'Средневековье', 75000.00, N'Зал 3'),
+(N'Статуя Будды', N'Древний Восток', 150000.00, N'Зал 4'),
+(N'Модернистская скульптура', N'XX век', 65000.00, N'Зал 5');
+GO
+
+INSERT INTO Guides (full_name, specialization, experience_years) VALUES
+(N'Иванов Сергей Петрович', N'Античная история', 15),
+(N'Петрова Ольга Николаевна', N'Современное искусство', 10),
+(N'Смирнов Алексей Владимирович', N'Средневековая культура', 12),
+(N'Кузнецова Марина Анатольевна', N'Древний Восток', 8);
+GO
+
+INSERT INTO Excursions (theme, guide_id, excursion_date, duration_minutes, max_group_size) VALUES
+(N'Античность и её сокровища', 1, '2025-10-10', 90, 20),
+(N'Современное искусство в экспозиции', 2, '2025-10-11', 120, 15),
+(N'Рыцарские доспехи и средневековье', 3, '2025-10-12', 75, 25),
+(N'Буддизм и культура Востока', 4, '2025-10-13', 60, 10);
+GO
+
+INSERT INTO ExcursionExhibits (excursion_id, exhibit_id) VALUES
+(1, 1),
+(2, 2),
+(3, 3),
+(4, 4),
+(2, 5);  -- Модернистская скульптура показана на экскурсии 2 и так далее
+GO
+
+INSERT INTO Visitors (ticket_type, visit_date, excursion_id) VALUES
+(N'Взрослый', '2025-10-10', 1),
+(N'Детский', '2025-10-11', 2),
+(N'Взрослый', '2025-10-11', 2),
+(N'Взрослый', '2025-10-12', 3),
+(N'Взрослый', '2025-10-13', 4);
+GO
+
+-- Вывод экспонатов с залами
+SELECT name, epoch, value, hall FROM Exhibits ORDER BY name;
+-- Вывод экскурсий с гидами и датами
+SELECT E.theme, G.full_name AS guide_name, E.excursion_date, E.duration_minutes, E.max_group_size
+FROM Excursions E
+JOIN Guides G ON E.guide_id = G.guide_id
+ORDER BY E.excursion_date;
+-- Вывод посетителей с типом билета и посещением
+SELECT visitor_id, ticket_type, visit_date, excursion_id FROM Visitors ORDER BY visit_date DESC;
+-- Вывод связей экскурсий и экспонатов
+SELECT EXC.theme, EXH.name AS exhibit_name, EXH.hall
+FROM ExcursionExhibits EE
+JOIN Excursions EXC ON EE.excursion_id = EXC.excursion_id
+JOIN Exhibits EXH ON EE.exhibit_id = EXH.exhibit_id
+ORDER BY EXC.theme, EXH.name;
