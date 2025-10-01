@@ -1,0 +1,173 @@
+USE master;
+GO
+
+ALTER DATABASE FilmStudio SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('FilmStudio') IS NOT NULL
+    DROP DATABASE FilmStudio;
+GO
+
+CREATE DATABASE FilmStudio;
+GO
+
+USE FilmStudio;
+GO
+
+IF OBJECT_ID('SceneActors', 'U') IS NOT NULL DROP TABLE SceneActors;
+IF OBJECT_ID('FilmActors', 'U') IS NOT NULL DROP TABLE FilmActors;
+IF OBJECT_ID('Scenes', 'U') IS NOT NULL DROP TABLE Scenes;
+IF OBJECT_ID('Crew', 'U') IS NOT NULL DROP TABLE Crew;
+IF OBJECT_ID('Actors', 'U') IS NOT NULL DROP TABLE Actors;
+IF OBJECT_ID('Films', 'U') IS NOT NULL DROP TABLE Films;
+GO
+
+CREATE TABLE Films (
+    film_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(200) NOT NULL,
+    genre NVARCHAR(100) NOT NULL,
+    release_year INT NOT NULL,
+    budget DECIMAL(18, 2) NOT NULL CHECK (budget > 0)
+);
+GO
+
+CREATE TABLE Actors (
+    actor_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    country NVARCHAR(100) NOT NULL,
+    birth_date DATE NOT NULL
+);
+GO
+
+CREATE TABLE Crew (
+    crew_id INT IDENTITY(1,1) PRIMARY KEY,
+    position NVARCHAR(100) NOT NULL,
+    full_name NVARCHAR(150) NOT NULL,
+    experience_years INT NOT NULL CHECK (experience_years >= 0)
+);
+GO
+
+CREATE TABLE Scenes (
+    scene_id INT IDENTITY(1,1) PRIMARY KEY,
+    film_id INT NOT NULL,
+    scene_number INT NOT NULL,
+    description NVARCHAR(500) NOT NULL,
+    duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+    FOREIGN KEY (film_id) REFERENCES Films(film_id)
+);
+GO
+
+-- Связь многие ко многим между фильмами и актерами
+CREATE TABLE FilmActors (
+    film_id INT NOT NULL,
+    actor_id INT NOT NULL,
+    PRIMARY KEY (film_id, actor_id),
+    FOREIGN KEY (film_id) REFERENCES Films(film_id),
+    FOREIGN KEY (actor_id) REFERENCES Actors(actor_id)
+);
+GO
+
+-- Проверка участия актера в конкретной сцене — связь many-to-many сцен и актеров
+CREATE TABLE SceneActors (
+    scene_id INT NOT NULL,
+    actor_id INT NOT NULL,
+    PRIMARY KEY (scene_id, actor_id),
+    FOREIGN KEY (scene_id) REFERENCES Scenes(scene_id),
+    FOREIGN KEY (actor_id) REFERENCES Actors(actor_id)
+);
+GO
+
+-- Триггер для проверки, что актер участвует в фильме, к которому относится сцена, при добавлении в SceneActors
+CREATE TRIGGER trg_CheckActorInFilm
+ON SceneActors
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN Scenes s ON i.scene_id = s.scene_id
+        LEFT JOIN FilmActors fa ON s.film_id = fa.film_id AND i.actor_id = fa.actor_id
+        WHERE fa.actor_id IS NULL
+    )
+    BEGIN
+        RAISERROR('Актер не участвует в фильме, к которому принадлежит сцена!', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END;
+
+    INSERT INTO SceneActors(scene_id, actor_id)
+    SELECT scene_id, actor_id FROM inserted;
+END;
+GO
+
+-- Пример данных
+
+INSERT INTO Films (name, genre, release_year, budget) VALUES
+(N'Великий побег', N'Приключение', 1963, 4000000),
+(N'Матрица', N'Фантастика', 1999, 63000000),
+(N'Титаник', N'Драма', 1997, 200000000),
+(N'Начало', N'Научная фантастика', 2010, 160000000);
+GO
+
+INSERT INTO Actors (full_name, country, birth_date) VALUES
+(N'Харрисон Форд', N'США', '1942-07-13'),
+(N'Киану Ривз', N'Канада', '1964-09-02'),
+(N'Ди Каприо Леонардо', N'США', '1974-11-11'),
+(N'Кейт Уинслет', N'Великобритания', '1975-10-05'),
+(N'Леонардо Ди Каприо', N'США', '1974-11-11');
+GO
+
+INSERT INTO Crew (position, full_name, experience_years) VALUES
+(N'Режиссер', N'Стивен Спилберг', 40),
+(N'Оператор', N'Роджер Дикинс', 35),
+(N'Продюсер', N'Джеймс Кэмерон', 45);
+GO
+
+INSERT INTO Scenes (film_id, scene_number, description, duration_minutes) VALUES
+(1, 1, N'Побег из тюрьмы', 15),
+(2, 1, N'Погоня в Матрице', 20),
+(3, 1, N'Крушение Титаника', 30),
+(4, 1, N'Экшен в подсознании', 25);
+GO
+
+INSERT INTO FilmActors (film_id, actor_id) VALUES
+(1, 1), -- Харрисон Форд в "Великом побеге" (для примера)
+(2, 2), -- Киану Ривз в "Матрице"
+(3, 3), -- Ди Каприо в "Титанике"
+(3, 5), -- Леонардо Ди Каприо (еще раз, в случае дублирования)
+(4, 5); -- Леонардо Ди Каприо в "Начале"
+GO
+
+-- Пример корректных SceneActors (Актер участвует в фильме)
+INSERT INTO SceneActors (scene_id, actor_id) VALUES
+(1, 1), -- Харрисон Форд – сцена из фильма 1
+(2, 2), -- Киану Ривз – сцена из фильма 2
+(3, 3), -- Ди Каприо – сцена из фильма 3
+(4, 5); -- Леонардо Ди Каприо – сцена из фильма 4
+GO
+
+-- Список фильмов с жанром, годом и бюджетом
+SELECT name, genre, release_year, budget FROM Films ORDER BY release_year DESC;
+
+-- Актеры и фильмы (через many-to-many)
+SELECT F.name AS film_name, A.full_name AS actor_name, A.country, A.birth_date
+FROM FilmActors FA
+JOIN Films F ON FA.film_id = F.film_id
+JOIN Actors A ON FA.actor_id = A.actor_id
+ORDER BY F.name, A.full_name;
+
+-- Сцены с фильмами и длительностью
+SELECT S.scene_number, S.description, S.duration_minutes, F.name AS film_name
+FROM Scenes S
+JOIN Films F ON S.film_id = F.film_id
+ORDER BY F.name, S.scene_number;
+
+-- Актеры на сценах (с проверкой участия)
+SELECT SA.scene_id, S.description, A.full_name AS actor_name
+FROM SceneActors SA
+JOIN Scenes S ON SA.scene_id = S.scene_id
+JOIN Actors A ON SA.actor_id = A.actor_id
+ORDER BY SA.scene_id, A.full_name;
