@@ -1,0 +1,142 @@
+USE master;
+GO
+
+ALTER DATABASE Pharmacy SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('Pharmacy') IS NOT NULL
+    DROP DATABASE Pharmacy;
+GO
+
+CREATE DATABASE Pharmacy;
+GO
+
+USE Pharmacy;
+GO
+
+IF OBJECT_ID('MedicineSuppliers', 'U') IS NOT NULL DROP TABLE MedicineSuppliers;
+IF OBJECT_ID('Sales', 'U') IS NOT NULL DROP TABLE Sales;
+IF OBJECT_ID('Prescriptions', 'U') IS NOT NULL DROP TABLE Prescriptions;
+IF OBJECT_ID('Medicines', 'U') IS NOT NULL DROP TABLE Medicines;
+IF OBJECT_ID('Suppliers', 'U') IS NOT NULL DROP TABLE Suppliers;
+GO
+
+CREATE TABLE Medicines (
+    medicine_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    manufacturer NVARCHAR(150) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
+    expiry_date DATE NOT NULL CHECK (expiry_date > GETDATE())
+);
+GO
+
+CREATE TABLE Suppliers (
+    supplier_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    phone NVARCHAR(20) NOT NULL,
+    address NVARCHAR(250) NOT NULL
+);
+GO
+
+-- Связь многие ко многим между лекарствами и поставщиками
+CREATE TABLE MedicineSuppliers (
+    medicine_id INT NOT NULL,
+    supplier_id INT NOT NULL,
+    PRIMARY KEY (medicine_id, supplier_id),
+    FOREIGN KEY (medicine_id) REFERENCES Medicines(medicine_id),
+    FOREIGN KEY (supplier_id) REFERENCES Suppliers(supplier_id)
+);
+GO
+
+CREATE TABLE Sales (
+    sale_id INT IDENTITY(1,1) PRIMARY KEY,
+    sale_date DATETIME NOT NULL DEFAULT GETDATE(),
+    medicine_id INT NOT NULL,
+    quantity INT NOT NULL CHECK (quantity > 0),
+    total_amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    FOREIGN KEY (medicine_id) REFERENCES Medicines(medicine_id)
+);
+GO
+
+CREATE TABLE Prescriptions (
+    prescription_id INT IDENTITY(1,1) PRIMARY KEY,
+    doctor NVARCHAR(150) NOT NULL,
+    patient NVARCHAR(150) NOT NULL,
+    medicine_id INT NOT NULL,
+    prescription_date DATE NOT NULL,
+    FOREIGN KEY (medicine_id) REFERENCES Medicines(medicine_id)
+);
+GO
+
+-- Триггер для автоматического расчёта суммы продажи: quantity * price лекарства
+CREATE TRIGGER trg_CalculateSaleAmount
+ON Sales
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE S
+    SET total_amount = I.quantity * M.price
+    FROM Sales S
+    JOIN inserted I ON S.sale_id = I.sale_id
+    JOIN Medicines M ON S.medicine_id = M.medicine_id;
+END;
+GO
+
+-- Примеры данных
+
+INSERT INTO Suppliers (name, phone, address) VALUES
+(N'ООО "ФармПлюс"', '+79211234567', N'г. Москва, ул. Ломоносова, д.12'),
+(N'ЗАО "МедСнаб"', '+79219876543', N'г. Санкт-Петербург, пр. Ленина, д.45'),
+(N'ООО "Аптека Востока"', '+79331234567', N'г. Екатеринбург, ул. Мира, д.7');
+GO
+
+INSERT INTO Medicines (name, manufacturer, price, expiry_date) VALUES
+(N'Парацетамол', N'ФармПлюс', 50.00, DATEADD(MONTH, 12, GETDATE())),
+(N'Амоксициллин', N'МедСнаб', 150.00, DATEADD(MONTH, 6, GETDATE())),
+(N'Витамин C', N'Аптека Востока', 80.00, DATEADD(MONTH, 24, GETDATE()));
+GO
+
+INSERT INTO MedicineSuppliers (medicine_id, supplier_id) VALUES
+(1, 1),
+(2, 2),
+(3, 3),
+(1, 2); -- Парацетамол может поставлять и МедСнаб
+GO
+
+INSERT INTO Sales (medicine_id, quantity) VALUES
+(1, 10),
+(2, 5),
+(3, 20);
+GO
+
+INSERT INTO Prescriptions (doctor, patient, medicine_id, prescription_date) VALUES
+(N'Иванов Сергей Петрович', N'Петрова Анна Александровна', 1, '2025-09-15'),
+(N'Смирнова Ольга Викторовна', N'Иванов Дмитрий Сергеевич', 2, '2025-09-20'),
+(N'Кузнецова Мария Ивановна', N'Сидоров Алексей Николаевич', 3, '2025-09-25');
+GO
+
+-- Пример выборок
+
+-- Лекарства с производителем, ценой и сроком годности
+SELECT name, manufacturer, price, expiry_date FROM Medicines ORDER BY name;
+
+-- Поставщики для лекарства
+SELECT M.name AS medicine_name, S.name AS supplier_name, S.phone, S.address
+FROM MedicineSuppliers MS
+JOIN Medicines M ON MS.medicine_id = M.medicine_id
+JOIN Suppliers S ON MS.supplier_id = S.supplier_id
+ORDER BY M.name, S.name;
+
+-- Продажи с общей суммой и датой
+SELECT sale_date, M.name AS medicine_name, quantity, total_amount
+FROM Sales S
+JOIN Medicines M ON S.medicine_id = M.medicine_id
+ORDER BY sale_date DESC;
+
+-- Рецепты с врачом, пациентом, лекарством и датой
+SELECT doctor, patient, M.name AS medicine_name, prescription_date
+FROM Prescriptions P
+JOIN Medicines M ON P.medicine_id = M.medicine_id
+ORDER BY prescription_date DESC;
