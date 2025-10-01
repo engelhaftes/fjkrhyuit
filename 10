@@ -1,0 +1,102 @@
+USE master;
+GO
+
+ALTER DATABASE University SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('University') IS NOT NULL
+    DROP DATABASE University;
+GO
+
+CREATE DATABASE University;
+GO
+
+USE University;
+GO
+
+IF OBJECT_ID('Grades', 'U') IS NOT NULL DROP TABLE Grades;
+IF OBJECT_ID('Courses', 'U') IS NOT NULL DROP TABLE Courses;
+IF OBJECT_ID('Professors', 'U') IS NOT NULL DROP TABLE Professors;
+IF OBJECT_ID('Students', 'U') IS NOT NULL DROP TABLE Students;
+GO
+
+CREATE TABLE Students (
+    student_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    group_name NVARCHAR(50) NOT NULL,
+    enrollment_year INT NOT NULL
+);
+GO
+
+CREATE TABLE Professors (
+    professor_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    position NVARCHAR(100) NOT NULL,
+    department NVARCHAR(100) NOT NULL
+);
+GO
+
+CREATE TABLE Courses (
+    course_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(200) NOT NULL,
+    semester INT NOT NULL CHECK (semester > 0),
+    credits INT NOT NULL CHECK (credits > 0)
+);
+GO
+
+CREATE TABLE Grades (
+    grade_id INT IDENTITY(1,1) PRIMARY KEY,
+    student_id INT NOT NULL,
+    course_id INT NOT NULL,
+    grade_date DATE NOT NULL,
+    grade INT NOT NULL CHECK (grade BETWEEN 2 AND 5),
+    FOREIGN KEY (student_id) REFERENCES Students(student_id),
+    FOREIGN KEY (course_id) REFERENCES Courses(course_id),
+    CONSTRAINT UQ_Student_Course UNIQUE (student_id, course_id)
+);
+GO
+
+-- Примеры данных
+
+INSERT INTO Students (full_name, group_name, enrollment_year) VALUES
+(N'Иванов Сергей Александрович', N'БВТ-101', 2022),
+(N'Петрова Марина Ивановна', N'ИБ-102', 2021),
+(N'Смирнов Алексей Петрович', N'МТ-103', 2023);
+GO
+
+INSERT INTO Professors (full_name, position, department) VALUES
+(N'Кузнецов Дмитрий Иванович', N'Доцент', N'Кафедра математики'),
+(N'Алексеева Ольга Сергеевна', N'Профессор', N'Кафедра информатики'),
+(N'Васильев Петр Сергеевич', N'Доцент', N'Кафедра физики');
+GO
+
+INSERT INTO Courses (name, semester, credits) VALUES
+(N'Математика', 1, 6),
+(N'Программирование', 2, 8),
+(N'Физика', 1, 5);
+GO
+
+INSERT INTO Grades (student_id, course_id, grade_date, grade) VALUES
+(1, 1, '2023-12-15', 5),
+(1, 2, '2024-05-20', 4),
+(2, 1, '2023-12-16', 3),
+(3, 3, '2023-12-18', 4);
+GO
+
+-- Пример выборок
+
+-- Студенты с группами и годом поступления
+SELECT full_name, group_name, enrollment_year FROM Students ORDER BY full_name;
+
+-- Преподаватели с должностями и кафедрами
+SELECT full_name, position, department FROM Professors ORDER BY full_name;
+
+-- Курсы с семестром и кредитами
+SELECT name, semester, credits FROM Courses ORDER BY semester, name;
+
+-- Оценки студентов по курсам
+SELECT S.full_name AS student_name, C.name AS course_name, G.grade_date, G.grade
+FROM Grades G
+JOIN Students S ON G.student_id = S.student_id
+JOIN Courses C ON G.course_id = C.course_id
+ORDER BY S.full_name, C.name;
