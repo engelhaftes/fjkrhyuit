@@ -1,0 +1,255 @@
+USE master;
+GO
+
+ALTER DATABASE CoffeeShop SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('CoffeeShop') IS NOT NULL
+    DROP DATABASE CoffeeShop;
+GO
+
+CREATE DATABASE CoffeeShop;
+GO
+
+USE CoffeeShop;
+GO
+
+IF OBJECT_ID('DrinkIngredients', 'U') IS NOT NULL DROP TABLE DrinkIngredients;
+IF OBJECT_ID('Orders', 'U') IS NOT NULL DROP TABLE Orders;
+IF OBJECT_ID('Baristas', 'U') IS NOT NULL DROP TABLE Baristas;
+IF OBJECT_ID('Ingredients', 'U') IS NOT NULL DROP TABLE Ingredients;
+IF OBJECT_ID('Drinks', 'U') IS NOT NULL DROP TABLE Drinks;
+GO
+
+CREATE TABLE Baristas (
+    barista_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    shift NVARCHAR(50) NOT NULL,
+    rating DECIMAL(3,2) NOT NULL CHECK (rating BETWEEN 0 AND 5)
+);
+GO
+
+CREATE TABLE Ingredients (
+    ingredient_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(100) NOT NULL,
+    unit NVARCHAR(20) NOT NULL,
+    quantity DECIMAL(18, 3) NOT NULL CHECK (quantity >= 0) -- остаток ингредиента на складе
+);
+GO
+
+CREATE TABLE Drinks (
+    drink_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    type NVARCHAR(50) NOT NULL,
+    size CHAR(1) NOT NULL CHECK (size IN ('S', 'M', 'L')),
+    price DECIMAL(10, 2) NOT NULL CHECK (price >= 0)
+);
+GO
+
+-- Связь Many-to-Many между напитками и ингредиентами — рецепты
+CREATE TABLE DrinkIngredients (
+    drink_id INT NOT NULL,
+    ingredient_id INT NOT NULL,
+    amount DECIMAL(10, 3) NOT NULL CHECK (amount > 0), -- количество ингредиента на порцию
+    PRIMARY KEY (drink_id, ingredient_id),
+    FOREIGN KEY (drink_id) REFERENCES Drinks(drink_id),
+    FOREIGN KEY (ingredient_id) REFERENCES Ingredients(ingredient_id)
+);
+GO
+
+CREATE TABLE Orders (
+    order_id INT IDENTITY(1,1) PRIMARY KEY,
+    order_number NVARCHAR(50) NOT NULL UNIQUE,
+    barista_id INT NOT NULL,
+    order_date DATETIME NOT NULL DEFAULT GETDATE(),
+    total_amount DECIMAL(10, 2) NOT NULL CHECK (total_amount >= 0),
+    FOREIGN KEY (barista_id) REFERENCES Baristas(barista_id)
+);
+GO
+
+-- Триггер для контроля остатка ингредиентов при заказах –
+-- тут модель требует движение ингредиентов с уменьшением остатков.
+-- Для простоты добавим таблицу OrderDrinks (какие напитки и сколько в заказе),
+-- а затем триггер на её вставку будет уменьшать ингредиенты.
+
+IF OBJECT_ID('OrderDrinks', 'U') IS NOT NULL DROP TABLE OrderDrinks;
+GO
+
+CREATE TABLE OrderDrinks (
+    order_drink_id INT IDENTITY(1,1) PRIMARY KEY,
+    order_id INT NOT NULL,
+    drink_id INT NOT NULL,
+    quantity INT NOT NULL CHECK (quantity > 0),
+    FOREIGN KEY (order_id) REFERENCES Orders(order_id),
+    FOREIGN KEY (drink_id) REFERENCES Drinks(drink_id)
+);
+GO
+
+CREATE TRIGGER trg_CheckAndUpdateIngredients
+ON OrderDrinks
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @drink_id INT, @qty INT;
+    DECLARE @required_amount DECIMAL(18, 3);
+    DECLARE @ingredient_id INT;
+    DECLARE @available_qty DECIMAL(18,3);
+
+    -- Для каждой строки проверки и списания ингредиентов
+    DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
+    SELECT drink_id, quantity FROM inserted;
+
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @drink_id, @qty;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        DECLARE ingredient_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT ingredient_id, amount FROM DrinkIngredients WHERE drink_id = @drink_id;
+
+        OPEN ingredient_cursor;
+        FETCH NEXT FROM ingredient_cursor INTO @ingredient_id, @required_amount;
+
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            SET @required_amount = @required_amount * @qty;
+
+            SELECT @available_qty = quantity FROM Ingredients WHERE ingredient_id = @ingredient_id;
+
+            IF @available_qty < @required_amount
+            BEGIN
+                RAISERROR('Недостаточно ингредиентов для заказа', 16, 1);
+                ROLLBACK TRANSACTION;
+                CLOSE ingredient_cursor;
+                CLOSE cur;
+                DEALLOCATE ingredient_cursor;
+                DEALLOCATE cur;
+                RETURN;
+            END
+
+            FETCH NEXT FROM ingredient_cursor INTO @ingredient_id, @required_amount;            
+        END
+
+        CLOSE ingredient_cursor;
+        DEALLOCATE ingredient_cursor;
+
+        FETCH NEXT FROM cur INTO @drink_id, @qty;
+    END
+
+    CLOSE cur;
+    DEALLOCATE cur;
+
+    -- Если все проверки пройдены, уменьшаем ингредиенты и вставляем записи
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @drink_id, @qty;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        DECLARE ingredient_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT ingredient_id, amount FROM DrinkIngredients WHERE drink_id = @drink_id;
+
+        OPEN ingredient_cursor;
+        FETCH NEXT FROM ingredient_cursor INTO @ingredient_id, @required_amount;
+
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            UPDATE Ingredients
+            SET quantity = quantity - @required_amount * @qty
+            WHERE ingredient_id = @ingredient_id;
+
+            FETCH NEXT FROM ingredient_cursor INTO @ingredient_id, @required_amount;
+        END
+
+        CLOSE ingredient_cursor;
+        DEALLOCATE ingredient_cursor;
+
+        FETCH NEXT FROM cur INTO @drink_id, @qty;
+    END
+
+    CLOSE cur;
+    DEALLOCATE cur;
+
+    -- Вставка в OrderDrinks
+    INSERT INTO OrderDrinks (order_id, drink_id, quantity)
+    SELECT order_id, drink_id, quantity FROM inserted;
+END;
+GO
+
+-- Примеры данных
+
+INSERT INTO Baristas (full_name, shift, rating) VALUES
+(N'Алексей Петров', N'Утро', 4.75),
+(N'Мария Смирнова', N'День', 4.90),
+(N'Иван Козлов', N'Вечер', 4.60);
+GO
+
+INSERT INTO Ingredients (name, unit, quantity) VALUES
+(N'Эспрессо', N'мл', 5000),
+(N'Молоко', N'мл', 10000),
+(N'Вода', N'мл', 20000),
+(N'Сахар', N'г', 3000),
+(N'Какао-порошок', N'г', 1500);
+GO
+
+INSERT INTO Drinks (name, type, size, price) VALUES
+(N'Эспрессо', N'Кофе', 'S', 120),
+(N'Капучино', N'Кофе', 'M', 180),
+(N'Латте', N'Кофе', 'L', 220),
+(N'Американо', N'Кофе', 'M', 160),
+(N'Горячий шоколад', N'Горячий напиток', 'S', 200);
+GO
+
+INSERT INTO DrinkIngredients (drink_id, ingredient_id, amount) VALUES
+-- Эспрессо: 30 мл эспрессо
+(1, 1, 30),
+-- Капучино: 30 мл эспрессо + 150 мл молока
+(2, 1, 30),
+(2, 2, 150),
+-- Латте: 40 мл эспрессо + 200 мл молока + 5 г сахара
+(3, 1, 40),
+(3, 2, 200),
+(3, 4, 5),
+-- Американо: 30 мл эспрессо + 100 мл воды
+(4, 1, 30),
+(4, 3, 100),
+-- Горячий шоколад: 200 мл молока + 30 г какао + 10 г сахара
+(5, 2, 200),
+(5, 5, 30),
+(5, 4, 10);
+GO
+
+INSERT INTO Orders (order_number, barista_id, order_date, total_amount) VALUES
+(N'ORD001', 1, '2025-10-01 09:00', 300),
+(N'ORD002', 2, '2025-10-01 10:30', 400),
+(N'ORD003', 3, '2025-10-01 11:15', 220);
+GO
+
+INSERT INTO OrderDrinks (order_id, drink_id, quantity) VALUES
+(1, 2, 1), -- заказал 1 капучино
+(1, 1, 1), -- + 1 эспрессо
+(2, 3, 2), -- заказал 2 латте
+(3, 5, 1); -- заказал 1 горячий шоколад
+GO
+
+-- Примеры выборок
+
+-- Список напитков с типом, размером и ценой
+SELECT name, type, size, price FROM Drinks ORDER BY name;
+
+-- Список ингредиентов с остатками
+SELECT name, unit, quantity FROM Ingredients ORDER BY name;
+
+-- Список заказов с бариста и суммой
+SELECT O.order_number, B.full_name AS barista_name, O.order_date, O.total_amount
+FROM Orders O
+JOIN Baristas B ON O.barista_id = B.barista_id
+ORDER BY O.order_date;
+
+-- Рецепты напитков: напиток, ингредиент, количество
+SELECT D.name AS drink_name, I.name AS ingredient_name, DI.amount, I.unit
+FROM DrinkIngredients DI
+JOIN Drinks D ON DI.drink_id = D.drink_id
+JOIN Ingredients I ON DI.ingredient_id = I.ingredient_id
+ORDER BY D.name, I.name;
