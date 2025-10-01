@@ -1,0 +1,138 @@
+USE master;
+GO
+
+ALTER DATABASE Cinema SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('Cinema') IS NOT NULL
+    DROP DATABASE Cinema;
+GO
+
+CREATE DATABASE Cinema;
+GO
+
+USE Cinema;
+GO
+
+IF OBJECT_ID('Tickets', 'U') IS NOT NULL DROP TABLE Tickets;
+IF OBJECT_ID('Sessions', 'U') IS NOT NULL DROP TABLE Sessions;
+IF OBJECT_ID('Halls', 'U') IS NOT NULL DROP TABLE Halls;
+IF OBJECT_ID('Films', 'U') IS NOT NULL DROP TABLE Films;
+GO
+
+CREATE TABLE Films (
+    film_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(200) NOT NULL,
+    genre NVARCHAR(100) NOT NULL,
+    duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+    rating NVARCHAR(5) NOT NULL CHECK (rating IN ('0', '6', '12', '16', '18+'))
+);
+GO
+
+CREATE TABLE Halls (
+    hall_id INT IDENTITY(1,1) PRIMARY KEY,
+    hall_number INT NOT NULL UNIQUE,
+    hall_type NVARCHAR(50) NOT NULL,
+    seats_count INT NOT NULL CHECK (seats_count > 0)
+);
+GO
+
+CREATE TABLE Sessions (
+    session_id INT IDENTITY(1,1) PRIMARY KEY,
+    session_date DATE NOT NULL,
+    session_time TIME NOT NULL,
+    hall_id INT NOT NULL,
+    film_id INT NOT NULL,
+    FOREIGN KEY (hall_id) REFERENCES Halls(hall_id),
+    FOREIGN KEY (film_id) REFERENCES Films(film_id)
+);
+GO
+
+CREATE TABLE Tickets (
+    ticket_id INT IDENTITY(1,1) PRIMARY KEY,
+    seat_number INT NOT NULL,
+    row_number INT NOT NULL,
+    session_id INT NOT NULL,
+    price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
+    FOREIGN KEY (session_id) REFERENCES Sessions(session_id)
+);
+GO
+
+-- Триггер для проверки занятости места при продаже билета
+CREATE TRIGGER trg_CheckSeatAvailability
+ON Tickets
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN Tickets t ON t.session_id = i.session_id AND t.seat_number = i.seat_number AND t.row_number = i.row_number
+    )
+    BEGIN
+        RAISERROR('Место уже занято на этом сеансе!', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    INSERT INTO Tickets (seat_number, row_number, session_id, price)
+    SELECT seat_number, row_number, session_id, price FROM inserted;
+END;
+GO
+
+-- Примеры данных
+
+INSERT INTO Films (name, genre, duration_minutes, rating) VALUES
+(N'Интерстеллар', N'Фантастика', 169, '12'),
+(N'Джокер', N'Триллер', 122, '18+'),
+(N'Король Лев', N'Мультфильм', 88, '0'),
+(N'Матрица', N'Фантастика', 136, '16'),
+(N'Титаник', N'Драма', 195, '12');
+GO
+
+INSERT INTO Halls (hall_number, hall_type, seats_count) VALUES
+(1, N'IMAX', 120),
+(2, N'3D', 100),
+(3, N'Стандарт', 80);
+GO
+
+INSERT INTO Sessions (session_date, session_time, hall_id, film_id) VALUES
+('2025-10-01', '18:00', 1, 1),
+('2025-10-01', '20:30', 2, 2),
+('2025-10-02', '14:00', 3, 3),
+('2025-10-02', '19:00', 1, 4),
+('2025-10-03', '21:00', 2, 5);
+GO
+
+INSERT INTO Tickets (seat_number, row_number, session_id, price) VALUES
+(1, 1, 1, 350),
+(2, 1, 1, 350),
+(3, 5, 2, 400),
+(10, 3, 3, 250),
+(5, 2, 4, 350);
+GO
+
+-- Пример попытки занять уже занятое место (проверка триггера, выдаст ошибку):
+-- INSERT INTO Tickets (seat_number, row_number, session_id, price) VALUES (1, 1, 1, 350); 
+
+-- Вывод фильмов с жанром, длительностью и рейтингом
+SELECT name, genre, duration_minutes, rating FROM Films ORDER BY name;
+
+-- Вывод залов с номером, типом и количеством мест
+SELECT hall_number, hall_type, seats_count FROM Halls ORDER BY hall_number;
+
+-- Вывод сеансов с датой, временем, залом и фильмом
+SELECT S.session_date, S.session_time, H.hall_number, H.hall_type, F.name AS film_name
+FROM Sessions S
+JOIN Halls H ON S.hall_id = H.hall_id
+JOIN Films F ON S.film_id = F.film_id
+ORDER BY S.session_date, S.session_time;
+
+-- Вывод билетов с местами и ценой
+SELECT T.seat_number, T.row_number, S.session_date, S.session_time, T.price, F.name AS film_name
+FROM Tickets T
+JOIN Sessions S ON T.session_id = S.session_id
+JOIN Films F ON S.film_id = F.film_id
+ORDER BY S.session_date, S.session_time, T.row_number, T.seat_number;
