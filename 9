@@ -1,0 +1,104 @@
+USE master;
+GO
+
+ALTER DATABASE Hospital SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('Hospital') IS NOT NULL
+    DROP DATABASE Hospital;
+GO
+
+CREATE DATABASE Hospital;
+GO
+
+USE Hospital;
+GO
+
+IF OBJECT_ID('Patients', 'U') IS NOT NULL DROP TABLE Patients;
+IF OBJECT_ID('MedicalStaff', 'U') IS NOT NULL DROP TABLE MedicalStaff;
+IF OBJECT_ID('Rooms', 'U') IS NOT NULL DROP TABLE Rooms;
+IF OBJECT_ID('Departments', 'U') IS NOT NULL DROP TABLE Departments;
+GO
+
+CREATE TABLE Departments (
+    department_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    floor INT NOT NULL,
+    head NVARCHAR(150) NOT NULL
+);
+GO
+
+CREATE TABLE Rooms (
+    room_id INT IDENTITY(1,1) PRIMARY KEY,
+    room_number NVARCHAR(20) NOT NULL,
+    department_id INT NOT NULL,
+    beds_count INT NOT NULL CHECK (beds_count BETWEEN 1 AND 6),
+    FOREIGN KEY (department_id) REFERENCES Departments(department_id),
+    CONSTRAINT UQ_RoomNumber_Department UNIQUE (room_number, department_id)
+);
+GO
+
+CREATE TABLE Patients (
+    patient_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    diagnosis NVARCHAR(250) NOT NULL,
+    admission_date DATE NOT NULL
+);
+GO
+
+CREATE TABLE MedicalStaff (
+    staff_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    position NVARCHAR(100) NOT NULL,
+    department_id INT NOT NULL,
+    FOREIGN KEY (department_id) REFERENCES Departments(department_id)
+);
+GO
+
+-- Примеры данных
+
+INSERT INTO Departments (name, floor, head) VALUES
+(N'Терапевтическое отделение', 3, N'Иванов Сергей Петрович'),
+(N'Хирургическое отделение', 2, N'Петров Алексей Иванович'),
+(N'Педиатрическое отделение', 4, N'Смирнова Марина Сергеевна');
+GO
+
+INSERT INTO Rooms (room_number, department_id, beds_count) VALUES
+(N'301', 1, 4),
+(N'302', 1, 2),
+(N'201', 2, 3),
+(N'202', 2, 6),
+(N'401', 3, 1);
+GO
+
+INSERT INTO Patients (full_name, diagnosis, admission_date) VALUES
+(N'Козлов Дмитрий Сергеевич', N'Пневмония', '2025-09-01'),
+(N'Сидорова Елена Ивановна', N'Перелом ноги', '2025-09-10'),
+(N'Михайлова Анна Петровна', N'Грипп', '2025-09-15');
+GO
+
+INSERT INTO MedicalStaff (full_name, position, department_id) VALUES
+(N'Алексей Иванович Смирнов', N'Врач терапевт', 1),
+(N'Марина Викторовна Лебедева', N'Хирург', 2),
+(N'Олег Николаевич Федоров', N'Педиатр', 3);
+GO
+
+-- Пример выборок
+
+-- Отделения с этажом и заведующим
+SELECT name, floor, head FROM Departments ORDER BY name;
+
+-- Палаты с номером, отделением и количеством мест
+SELECT r.room_number, d.name AS department_name, r.beds_count
+FROM Rooms r
+JOIN Departments d ON r.department_id = d.department_id
+ORDER BY d.name, r.room_number;
+
+-- Пациенты с диагнозом и датой поступления
+SELECT full_name, diagnosis, admission_date FROM Patients ORDER BY admission_date DESC;
+
+-- Медперсонал с должностью и отделением
+SELECT ms.full_name, ms.position, d.name AS department_name
+FROM MedicalStaff ms
+JOIN Departments d ON ms.department_id = d.department_id
+ORDER BY d.name, ms.full_name;
