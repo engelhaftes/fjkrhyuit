@@ -1,0 +1,131 @@
+USE master;
+GO
+
+ALTER DATABASE VeterinaryClinic SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('VeterinaryClinic') IS NOT NULL
+    DROP DATABASE VeterinaryClinic;
+GO
+
+CREATE DATABASE VeterinaryClinic;
+GO
+
+USE VeterinaryClinic;
+GO
+
+IF OBJECT_ID('MedicalRecords', 'U') IS NOT NULL DROP TABLE MedicalRecords;
+IF OBJECT_ID('Appointments', 'U') IS NOT NULL DROP TABLE Appointments;
+IF OBJECT_ID('Pets', 'U') IS NOT NULL DROP TABLE Pets;
+IF OBJECT_ID('Doctors', 'U') IS NOT NULL DROP TABLE Doctors;
+IF OBJECT_ID('Owners', 'U') IS NOT NULL DROP TABLE Owners;
+GO
+
+CREATE TABLE Owners (
+    owner_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(100) NOT NULL,
+    phone NVARCHAR(20) NOT NULL,
+    address NVARCHAR(200) NOT NULL
+);
+GO
+
+CREATE TABLE Pets (
+    pet_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(100) NOT NULL,
+    species NVARCHAR(50) NOT NULL,
+    breed NVARCHAR(50),
+    age INT NOT NULL CHECK (age > 0),
+    owner_id INT NOT NULL,
+    FOREIGN KEY (owner_id) REFERENCES Owners(owner_id)
+);
+GO
+
+CREATE TABLE Doctors (
+    doctor_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(100) NOT NULL,
+    specialization NVARCHAR(100) NOT NULL,
+    schedule NVARCHAR(200) NOT NULL
+);
+GO
+
+CREATE TABLE Appointments (
+    appointment_id INT IDENTITY(1,1) PRIMARY KEY,
+    appointment_date DATETIME NOT NULL DEFAULT GETDATE(),
+    pet_id INT NOT NULL,
+    doctor_id INT NOT NULL,
+    diagnosis NVARCHAR(500) NOT NULL,
+    FOREIGN KEY (pet_id) REFERENCES Pets(pet_id),
+    FOREIGN KEY (doctor_id) REFERENCES Doctors(doctor_id)
+);
+GO
+
+CREATE TABLE MedicalRecords (
+    record_id INT IDENTITY(1,1) PRIMARY KEY,
+    pet_id INT NOT NULL,
+    record_date DATETIME NOT NULL DEFAULT GETDATE(),
+    description NVARCHAR(MAX) NOT NULL,
+    FOREIGN KEY (pet_id) REFERENCES Pets(pet_id)
+);
+GO
+
+INSERT INTO Owners (full_name, phone, address) VALUES
+(N'Иванов Иван Иванович', '+79111234567', N'г. Москва, ул. Ленина, д.10'),
+(N'Петрова Анна Сергеевна', '+79222345678', N'г. Санкт-Петербург, пр. Невский, д.15'),
+(N'Сидоров Алексей Петрович', '+79333456789', N'г. Новосибирск, ул. Советская, д.5'),
+(N'Кузнецова Мария Ивановна', '+79444567890', N'г. Екатеринбург, ул. Мира, д.18'),
+(N'Васильев Петр Сергеевич', '+79555678901', N'г. Казань, ул. Победы, д.25');
+GO
+
+INSERT INTO Pets (name, species, breed, age, owner_id) VALUES
+(N'Барсик', N'Кошка', N'Сибирская', 3, 1),
+(N'Шарик', N'Собака', N'Лабрадор', 5, 2),
+(N'Мурка', N'Кошка', N'Британская', 4, 3),
+(N'Тузик', N'Собака', N'Такса', 2, 4),
+(N'Рекс', N'Собака', N'Немецкая овчарка', 6, 5);
+GO
+
+INSERT INTO Doctors (full_name, specialization, schedule) VALUES
+(N'Смирнов Дмитрий Анатольевич', N'Терапевт', N'Пн-Пт 9:00-18:00'),
+(N'Кузнецова Мария Ивановна', N'Хирург', N'Вт-Чт 10:00-16:00'),
+(N'Федорова Елена Петровна', N'Стоматолог', N'Ср-Пт 8:00-14:00'),
+(N'Новиков Дмитрий Олегович', N'Кардиолог', N'Пн-Ср 11:00-17:00'),
+(N'Алексеева Ольга Сергеевна', N'Терапевт', N'Пн-Пт 9:00-15:00');
+GO
+
+INSERT INTO Appointments (appointment_date, pet_id, doctor_id, diagnosis) VALUES
+('2025-10-01 14:00:00', 1, 1, N'Пищевое отравление'),
+('2025-10-02 10:30:00', 2, 2, N'Перелом лапы'),
+('2025-10-03 09:00:00', 3, 3, N'Зубной абсцесс'),
+('2025-10-04 13:00:00', 4, 4, N'Сердечная недостаточность'),
+('2025-10-05 15:30:00', 5, 5, N'Инфекция верхних дыхательных путей');
+GO
+
+INSERT INTO MedicalRecords (pet_id, record_date, description) VALUES
+(1, '2025-09-15', N'Вакцинация от бешенства'),
+(2, '2025-09-20', N'Осмотр после операции перелома'),
+(3, '2025-09-25', N'Чистка зубов и лечение абсцесса'),
+(4, '2025-09-28', N'Диагностика и лечение сердечной недостаточности'),
+(5, '2025-09-30', N'Лечение респираторной инфекции');
+GO
+
+-- Вывод данных всех 3-4 таблиц в одном батче (без GO между SELECT)
+SELECT P.name AS pet_name, P.species, P.breed, P.age,
+       O.full_name AS owner_name, O.phone, O.address
+FROM Pets P
+JOIN Owners O ON P.owner_id = O.owner_id
+ORDER BY P.name;
+
+SELECT A.appointment_date, P.name AS pet_name, D.full_name AS doctor_name, A.diagnosis
+FROM Appointments A
+JOIN Pets P ON A.pet_id = P.pet_id
+JOIN Doctors D ON A.doctor_id = D.doctor_id
+ORDER BY A.appointment_date DESC;
+
+SELECT M.record_date, P.name AS pet_name, M.description
+FROM MedicalRecords M
+JOIN Pets P ON M.pet_id = P.pet_id
+ORDER BY M.record_date DESC;
+
+SELECT D.full_name AS doctor_name, D.specialization, D.schedule
+FROM Doctors D
+ORDER BY D.full_name;
