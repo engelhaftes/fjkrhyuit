@@ -1,0 +1,138 @@
+USE master;
+GO
+
+ALTER DATABASE TravelAgency SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+GO
+
+IF DB_ID('TravelAgency') IS NOT NULL
+    DROP DATABASE TravelAgency;
+GO
+
+CREATE DATABASE TravelAgency;
+GO
+
+USE TravelAgency;
+GO
+
+IF OBJECT_ID('Bookings', 'U') IS NOT NULL DROP TABLE Bookings;
+IF OBJECT_ID('Hotels', 'U') IS NOT NULL DROP TABLE Hotels;
+IF OBJECT_ID('Clients', 'U') IS NOT NULL DROP TABLE Clients;
+IF OBJECT_ID('Tours', 'U') IS NOT NULL DROP TABLE Tours;
+GO
+
+CREATE TABLE Tours (
+    tour_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    country NVARCHAR(100) NOT NULL,
+    duration INT NOT NULL CHECK (duration BETWEEN 1 AND 30),
+    price DECIMAL(10, 2) NOT NULL,
+    available_slots INT NOT NULL CHECK (available_slots >= 0)
+);
+GO
+
+CREATE TABLE Hotels (
+    hotel_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    stars INT NOT NULL CHECK (stars BETWEEN 1 AND 5),
+    country NVARCHAR(100) NOT NULL,
+    tour_id INT NOT NULL,
+    FOREIGN KEY (tour_id) REFERENCES Tours(tour_id)
+);
+GO
+
+CREATE TABLE Clients (
+    client_id INT IDENTITY(1,1) PRIMARY KEY,
+    full_name NVARCHAR(150) NOT NULL,
+    passport NVARCHAR(50) NOT NULL UNIQUE,
+    preferences NVARCHAR(500) NULL
+);
+GO
+
+CREATE TABLE Bookings (
+    booking_id INT IDENTITY(1,1) PRIMARY KEY,
+    tour_id INT NOT NULL,
+    client_id INT NOT NULL,
+    departure_date DATE NOT NULL,
+    FOREIGN KEY (tour_id) REFERENCES Tours(tour_id),
+    FOREIGN KEY (client_id) REFERENCES Clients(client_id)
+);
+GO
+
+-- Триггер для проверки доступности мест в туре при бронировании
+CREATE TRIGGER trg_CheckAvailability
+ON Bookings
+INSTEAD OF INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @tour_id INT, @count_existing INT, @count_new INT, @available INT;
+
+    SELECT TOP 1 @tour_id = tour_id FROM inserted;
+    SELECT @count_new = COUNT(*) FROM inserted;
+    SELECT @count_existing = COUNT(*) FROM Bookings WHERE tour_id = @tour_id;
+    SELECT @available = available_slots FROM Tours WHERE tour_id = @tour_id;
+
+    IF (@count_existing + @count_new) > @available
+    BEGIN
+        RAISERROR('Недостаточно доступных мест в туре!', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    INSERT INTO Bookings(tour_id, client_id, departure_date)
+    SELECT tour_id, client_id, departure_date FROM inserted;
+END;
+GO
+
+-- Примеры данных
+
+INSERT INTO Tours (name, country, duration, price, available_slots) VALUES
+(N'Путешествие по Италии', N'Италия', 10, 1500.00, 20),
+(N'Пляжный отдых на Мальдивах', N'Мальдивы', 7, 2500.00, 15),
+(N'Экскурсионный тур по Германии', N'Германия', 14, 1800.00, 25),
+(N'Приключения в Новой Зеландии', N'Новая Зеландия', 21, 3200.00, 10),
+(N'Отдых на Бали', N'Индонезия', 12, 2000.00, 18);
+GO
+
+INSERT INTO Hotels (name, stars, country, tour_id) VALUES
+(N'Grand Italia Hotel', 4, N'Италия', 1),
+(N'Maldives Resort', 5, N'Мальдивы', 2),
+(N'Berlin Central Hotel', 3, N'Германия', 3),
+(N'Kiwi Adventure Lodge', 4, N'Новая Зеландия', 4),
+(N'Bali Beach Hotel', 5, N'Индонезия', 5);
+GO
+
+INSERT INTO Clients (full_name, passport, preferences) VALUES
+(N'Иванов Сергей Александрович', N'1234567890', N'Любит пляжный отдых'),
+(N'Петрова Марина Ивановна', N'0987654321', N'Интересуются экскурсиями'),
+(N'Смирнов Алексей Петрович', N'1122334455', N'Активные виды спорта'),
+(N'Козлова Елена Владимировна', N'6677889900', N'Комфортные отели 4+ звезд'),
+(N'Васильев Дмитрий Сергеевич', N'5566778899', N'Приключенческие туры');
+GO
+
+INSERT INTO Bookings (tour_id, client_id, departure_date) VALUES
+(1, 1, '2025-11-05'),
+(2, 2, '2025-12-10'),
+(3, 3, '2026-01-15'),
+(4, 4, '2026-02-20'),
+(5, 5, '2026-03-10');
+GO
+
+-- Вывод туров с отелями
+SELECT T.name AS tour_name, T.country AS tour_country, T.duration, T.price, T.available_slots,
+       H.name AS hotel_name, H.stars, H.country AS hotel_country
+FROM Tours T
+LEFT JOIN Hotels H ON T.tour_id = H.tour_id
+ORDER BY T.name;
+-- Вывод клиентов и их бронирований
+SELECT C.full_name AS client_name, C.passport, C.preferences,
+       T.name AS tour_name, B.departure_date
+FROM Bookings B
+JOIN Clients C ON B.client_id = C.client_id
+JOIN Tours T ON B.tour_id = T.tour_id
+ORDER BY B.departure_date DESC;
+-- Вывод отелей с количеством звезд и страной
+SELECT name, stars, country FROM Hotels ORDER BY stars DESC, name;
+-- Вывод всех туров с доступными местами
+SELECT name, country, duration, price, available_slots FROM Tours ORDER BY available_slots DESC;
